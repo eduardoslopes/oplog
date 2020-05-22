@@ -3,7 +3,7 @@ package oplog_test
 import (
 	"log"
 
-	"github.com/gnokoheat/oplog"
+	"github.com/eduardoslopes/oplog"
 )
 
 func ExampleOptions_Tail() {
@@ -18,7 +18,7 @@ func ExampleOptions_Tail() {
 		Events:     []string{"insert", "update", "delete"},         // tailing target method
 	}
 
-	l := make(chan *[]oplog.Log) // Oplog Channel
+	l := make(chan []*oplog.Log) // Oplog Channel
 	e := make(chan error)        // Error Channel
 
 	// Oplog tailing start !

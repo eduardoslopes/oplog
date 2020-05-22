@@ -2,6 +2,7 @@ package oplog
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -22,7 +23,7 @@ type Options struct {
 
 // Log : Oplog document
 type Log struct {
-	Timestamp    time.Time              `json:"wall" bson:"wall"`
+	Timestamp    bson.MongoTimestamp    `json:"ts" bson:"ts"`
 	HistoryID    int64                  `json:"h" bson:"h"`
 	MongoVersion int                    `json:"v" bson:"v"`
 	Operation    string                 `json:"op" bson:"op"`
@@ -32,9 +33,10 @@ type Log struct {
 }
 
 // MgoConn : MongoDB connect
-func (o *Options) MgoConn(e chan error) (*mgo.Session, *mgo.Collection) {
+func (o *Options) MgoConn(e chan error) (*mgo.Session, *mgo.Collection, *mgo.Collection) {
 	var mgoSess *mgo.Session
-	var mgoColl *mgo.Collection
+	var oplogColl *mgo.Collection
+	var lastReadedOplogColl *mgo.Collection
 
 	m := &mgo.DialInfo{
 		Addrs:          o.Addrs,
@@ -52,59 +54,89 @@ func (o *Options) MgoConn(e chan error) (*mgo.Session, *mgo.Collection) {
 	sess, err := mgo.DialWithInfo(m)
 	if err != nil {
 		e <- err
-		return mgoSess, mgoColl
+		return mgoSess, oplogColl, lastReadedOplogColl
 	}
 	mgoSess = sess
-	mgoColl = mgoSess.DB("local").C("oplog.rs")
+	oplogColl = mgoSess.DB("local").C("oplog.rs")
+	lastReadedOplogColl = mgoSess.DB("local").C("lastReadedOplog")
 
-	return mgoSess, mgoColl
+	return mgoSess, oplogColl, lastReadedOplogColl
 }
 
 // Tail : MongoDB oplog tailing start
-func (o *Options) Tail(l chan *[]Log, e chan error) {
-	bsonInsert := bson.M{}
-	bsonUpdate := bson.M{}
-	bsonDelete := bson.M{}
-	for _, v := range o.Events {
-		if v != "insert" && v != "update" && v != "delete" {
-			e <- errors.New("Events type must be insert, update, delete")
-		}
-		if v == "insert" {
-			bsonInsert = bson.M{"op": "i"}
-		} else if v == "update" {
-			bsonUpdate = bson.M{"op": "u"}
-		} else if v == "delete" {
-			bsonDelete = bson.M{"op": "d"}
-		}
-	}
-	var events = bson.M{
-		"$or": []bson.M{
-			bsonInsert,
-			bsonUpdate,
-			bsonDelete,
-		},
-	}
+func (o *Options) Tail(l chan []*Log, e chan error) {
+	eventsQuery := getEventsQuery(o.Events, e)
+	namespaceQuery := getNamespaceQuery(o.DB, o.Collection)
 
-	sTime := time.Now().UTC()
-	mgoSess, mgoColl := o.MgoConn(e)
+	mgoSess, oplogColl, lastReadedOplogColl := o.MgoConn(e)
 	defer mgoSess.Close()
-	log.Println("[Oplog Tail Start] ", sTime)
+	log.Println("[Oplog Tail Start] ", time.Now())
+
+	ns := fmt.Sprintf("%s.%s", o.DB, o.Collection)
+	lastReadedQuery := bson.M{"ns": ns}
+
+	lastOplog := Log{}
+	err := lastReadedOplogColl.Find(lastReadedQuery).One(&lastOplog)
+	if err != nil {
+		oplogColl.Find(nil).Sort("-$natural").One(&lastOplog)
+	}
+	sTime := lastOplog.Timestamp
 
 	for {
-		var fetchedLog = []Log{}
-		err := mgoColl.Find(bson.M{
+		var fetchedLog = []*Log{}
+		err := oplogColl.Find(bson.M{
 			"$and": []bson.M{
-				bson.M{"ns": o.DB + "." + o.Collection},
-				bson.M{"wall": bson.M{"$gt": sTime}},
-				events,
+				bson.M{"ts": bson.M{"$gt": sTime}},
+				namespaceQuery,
+				eventsQuery,
 			},
-		}).Sort("wall:-1").All(&fetchedLog)
+		}).Sort("$natural").Limit(5000).All(&fetchedLog)
 		if err != nil {
 			e <- err
 		}
 		if len(fetchedLog) != 0 {
 			sTime = fetchedLog[len(fetchedLog)-1].Timestamp
-			l <- &fetchedLog
+			l <- fetchedLog
+
+			_, err = lastReadedOplogColl.RemoveAll(lastReadedQuery)
+			if err != nil {
+				e <- err
+			}
+			err = lastReadedOplogColl.Insert(fetchedLog[len(fetchedLog)-1])
+			if err != nil {
+				e <- err
+			}
 		}
 	}
+}
+
+func getEventsQuery(events []string, e chan error) bson.M {
+	eventsFilter := []bson.M{}
+	for _, v := range events {
+		if v != "insert" && v != "update" && v != "delete" {
+			e <- errors.New("Events type must be insert, update, delete")
+		}
+		if v == "insert" {
+			eventsFilter = append(eventsFilter, bson.M{"op": "i"})
+		} else if v == "update" {
+			eventsFilter = append(eventsFilter, bson.M{"op": "u"})
+		} else if v == "delete" {
+			eventsFilter = append(eventsFilter, bson.M{"op": "d"})
+		}
+	}
+
+	return bson.M{
+		"$or": eventsFilter,
+	}
+}
+
+func getNamespaceQuery(database, collection string) bson.M {
+	if database != "*" && collection != "*" {
+		return bson.M{"ns": database + "." + collection}
+	} else if database != "*" && collection == "*" {
+		return bson.M{"ns": bson.M{"$regex": bson.RegEx{fmt.Sprintf("^%s.", database), ""}}}
+	} else if database == "*" && collection != "*" {
+		return bson.M{"ns": bson.M{"$regex": bson.RegEx{fmt.Sprintf(".%s$", collection), ""}}}
+	}
+	return bson.M{}
 }

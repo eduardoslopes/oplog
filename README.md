@@ -1,5 +1,5 @@
 # Oplog
-![GitHub](https://img.shields.io/github/license/gnokoheat/oplog) ![GitHub top language](https://img.shields.io/github/languages/top/gnokoheat/oplog) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/gnokoheat/oplog) ![GitHub last commit](https://img.shields.io/github/last-commit/gnokoheat/oplog)
+![GitHub](https://img.shields.io/github/license/eduardoslopes/oplog) ![GitHub top language](https://img.shields.io/github/languages/top/eduardoslopes/oplog) ![GitHub release (latest by date)](https://img.shields.io/github/v/release/eduardoslopes/oplog) ![GitHub last commit](https://img.shields.io/github/last-commit/eduardoslopes/oplog)
 
 MongoDB replicaset oplog tailing by Golang
 
@@ -12,7 +12,7 @@ It can be send oplog to everywhere with minimal system resource usage.
 ## Install
 
 ``` go
-go get -u github.com/gnokoheat/oplog
+go get -u github.com/eduardoslopes/oplog
 ```
 
 ## Usage example
@@ -24,7 +24,7 @@ package main
 
 import (
 	"log"
-	"github.com/gnokoheat/oplog"
+	"github.com/eduardoslopes/oplog"
 )
 
 func main() {
